@@ -9,8 +9,6 @@ import os
 # MediaPipe + Landmarks
 # =========================
 mp_face_mesh = mp.solutions.face_mesh
-SMOOTH_ALPHA = 0.6
-prev_points = {}
 
 LMS = {
     "nose": 1,
@@ -84,18 +82,6 @@ ASSET_PATHS = {
     "ears": os.path.join(ASSET_DIR, "orejas.png"),
 }
 
-def smooth_point(key, pt):
-    if key not in prev_points:
-        prev_points[key] = pt
-        return pt
-    px, py = prev_points[key]
-    x = int(SMOOTH_ALPHA * pt[0] + (1 - SMOOTH_ALPHA) * px)
-    y = int(SMOOTH_ALPHA * pt[1] + (1 - SMOOTH_ALPHA) * py)
-    prev_points[key] = (x, y)
-    return (x, y)
-
-
-
 def lm_xy(face, idx, w, h):
     lm = face.landmark[idx]
     return int(lm.x * w), int(lm.y * h)
@@ -108,43 +94,6 @@ def angle_deg(p1, p2):
 
 def clamp(v, a, b):
     return max(a, min(b, v))
-
-def filtro_bw_cine(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    gray = cv2.equalizeHist(gray)
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-
-def filtro_warm(frame):
-    out = frame.copy().astype(np.float32)
-    out[:, :, 2] *= 1.1  # rojo
-    out[:, :, 1] *= 1.05 # verde
-    return np.clip(out, 0, 255).astype(np.uint8)
-
-def filtro_cold(frame):
-    out = frame.copy().astype(np.float32)
-    out[:, :, 0] *= 1.1  # azul
-    return np.clip(out, 0, 255).astype(np.uint8)
-
-def filtro_cartoon(frame):
-    blur = cv2.medianBlur(frame, 7)
-    edges = cv2.adaptiveThreshold(
-        cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
-        255,
-        cv2.ADAPTIVE_THRESH_MEAN_C,
-        cv2.THRESH_BINARY,
-        9,
-        9,
-    )
-    return cv2.bitwise_and(blur, blur, mask=edges)
-
-
-def head_yaw(face, w, h):
-    fl = lm_xy(face, LMS["face_left"], w, h)
-    fr = lm_xy(face, LMS["face_right"], w, h)
-    dx = fr[0] - fl[0]
-    return clamp(dx / w, -0.4, 0.4)
-
-
 
 # --------- FIX PNG: alpha real o “key” si trae tablero ----------
 def ensure_alpha_clean(bgra):
@@ -258,8 +207,8 @@ def aplicar_sombrero(frame, face, w, h):
     if hat is None:
         return frame
 
-    le = smooth_point("le", lm_xy(face, LMS["left_eye"], w, h))
-    re = smooth_point("re", lm_xy(face, LMS["right_eye"], w, h))
+    le = lm_xy(face, LMS["left_eye"], w, h)
+    re = lm_xy(face, LMS["right_eye"], w, h)
     fh = lm_xy(face, LMS["forehead"], w, h)
 
     eye_dist = dist(le, re)
@@ -287,8 +236,8 @@ def aplicar_gafas(frame, face, w, h):
     if glasses is None:
         return frame
 
-    le = smooth_point("le_g", lm_xy(face, LMS["left_eye"], w, h))
-    re = smooth_point("re_g", lm_xy(face, LMS["right_eye"], w, h))
+    le = lm_xy(face, LMS["left_eye"], w, h)
+    re = lm_xy(face, LMS["right_eye"], w, h)
 
     eye_dist = dist(le, re)
     if eye_dist < 2:
@@ -347,8 +296,8 @@ def aplicar_orejas(frame, face, w, h):
 
     le = lm_xy(face, LMS["left_eye"], w, h)
     re = lm_xy(face, LMS["right_eye"], w, h)
-    fl = smooth_point("fl_e", lm_xy(face, LMS["face_left"], w, h))
-    fr = smooth_point("fr_e", lm_xy(face, LMS["face_right"], w, h))
+    fl = lm_xy(face, LMS["face_left"], w, h)
+    fr = lm_xy(face, LMS["face_right"], w, h)
 
     face_w = dist(fl, fr)
     if face_w < 2:
