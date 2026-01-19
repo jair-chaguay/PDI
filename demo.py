@@ -5,8 +5,13 @@ from collections import deque
 import time
 import os
 
-mp_face_mesh = mp.solutions.face_mesh
 
+#Modulo 1
+
+mp_face_mesh = mp.solutions.face_mesh
+last_change_time = 0
+frame_count = 0
+start_time = time.time()
 LMS = {
     "nose": 1,
     "chin": 152,
@@ -31,74 +36,149 @@ LMS = {
     "r_iris_5": 477,
 }
 
+def lm_xy(face, idx, w, h):
+    lm = face.landmark[idx]
+    return int(lm.x * w), int(lm.y * h)
+
+
+def iris_center(face, side, w, h):
+    if side == "L":
+        ids = [LMS["l_iris_1"], LMS["l_iris_2"], LMS["l_iris_3"], LMS["l_iris_4"], LMS["l_iris_5"]]
+    else:
+        ids = [LMS["r_iris_1"], LMS["r_iris_2"], LMS["r_iris_3"], LMS["r_iris_4"], LMS["r_iris_5"]]
+    pts = [lm_xy(face, i, w, h) for i in ids]
+    cx = int(sum(p[0] for p in pts) / len(pts))
+    cy = int(sum(p[1] for p in pts) / len(pts))
+    return (cx, cy)
+
+
+
+#MODULO 2
+active_filter_index = 0
+baseline_ratio = None
+STATE = "NEUTRO"
+THRESHOLD = 0.10
+DEBOUNCE_DELAY_MS = 1000
+window = deque(maxlen=7)
+
 FILTROS = [
     "A: Sombrero (PNG)",
     "B: Gafas (PNG)",
     "C: Bigote (PNG)",
     "D: Orejas (PNG)",
     "E: Escena",
-    "F: Ojos Glow",
-    "G: Ojos Grandes",
-    "H: Boca Grande",
-    "I: Nariz Pequena",
-    "J: Cara Ancha",
-    "K: Cara Delgada",
-    "L: Menton Largo (Alien)",
-    "M: Mejillas Infladas (Chipmunk)",
-    "N: Frente Grande",
-    "O: Boca Pequena (Muneco)",
-    "P: Smile Forzado",
+    "F: Ojos Grandes",
+    "G: Boca Grande",
+    "H: Nariz Pequena",
+    "I: Cara Ancha",
+    "J: Cara Delgada",
+    "K: Menton Largo (Alien)",
+    "L: Mejillas Infladas (Chipmunk)",
+    "M: Frente Grande",
+    "N: Boca Pequena (Muneco)",
+    "O: Smile Forzado",
+    "P: Blanco y Negro",
+    "Q: Sepia",
+    "R: Filtro Frio",
+    "S: Filtro Calido",
+    "T: Cine Teal & Orange",
+    "U: Cara V-Shape",
+    "V: Baby Face",
+    "W: Cara Pez",
+    "X: Cabeza Alien XL",
 ]
-active_filter_index = 0
-
-baseline_ratio = None
-window = deque(maxlen=7)
-THRESHOLD = 0.10
-STATE = "NEUTRO"
-DEBOUNCE_DELAY_MS = 1000
-last_change_time = 0
-
-frame_count = 0
-start_time = time.time()
-
-ASSET_DIR = "assets"
-ASSET_PATHS = {
-    "hat": os.path.join(ASSET_DIR, "sombrero.png"),
-    "glasses": os.path.join(ASSET_DIR, "gafas.png"),
-    "mustache": os.path.join(ASSET_DIR, "bigote.png"),
-    "ears": os.path.join(ASSET_DIR, "orejas.png"),
-}
 
 
-def clamp(v, a, b):
-    return max(a, min(b, v))
+def calcular_ratio_vertical(face, w, h):
+    nose = face.landmark[LMS["nose"]]
+    chin = face.landmark[LMS["chin"]]
+    le = face.landmark[LMS["left_eye"]]
+    re = face.landmark[LMS["right_eye"]]
 
+    nose_y = nose.y * h
+    chin_y = chin.y * h
+    eyes_y = (le.y + re.y) / 2 * h
 
-def lm_xy(face, idx, w, h):
-    lm = face.landmark[idx]
-    return int(lm.x * w), int(lm.y * h)
-
-
-def dist(p1, p2):
-    return float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
-
-
-def angle_deg(p1, p2):
-    return float(np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0])))
-
-
-def sanitize_rgba(img):
-    if img is None:
+    face_altura = chin_y - eyes_y
+    if face_altura <= 0:
         return None
-    if img.ndim == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
-    if img.shape[2] == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
-    a = img[:, :, 3]
-    img[a == 0, 0] = 0
-    img[a == 0, 1] = 0
-    img[a == 0, 2] = 0
-    return img
+
+    return (nose_y - eyes_y) / face_altura
+
+
+def change_filter(direction, current_index, max_index):
+    if direction == "ARRIBA":
+        return (current_index - 1 + max_index) % max_index
+    if direction == "ABAJO":
+        return (current_index + 1) % max_index
+    return current_index
+
+
+
+
+#MODULO 3
+
+def overlay_rgba(frame_bgr, overlay_bgra, x, y):
+    if overlay_bgra is None:
+        return frame_bgr
+
+    h, w = overlay_bgra.shape[:2]
+    H, W = frame_bgr.shape[:2]
+
+    if x >= W or y >= H or x + w <= 0 or y + h <= 0:
+        return frame_bgr
+
+    x1, y1 = max(0, x), max(0, y)
+    x2, y2 = min(W, x + w), min(H, y + h)
+
+    ox1, oy1 = x1 - x, y1 - y
+    ox2, oy2 = ox1 + (x2 - x1), oy1 + (y2 - y1)
+
+    roi = frame_bgr[y1:y2, x1:x2]
+    overlay_crop = overlay_bgra[oy1:oy2, ox1:ox2]
+
+    alpha = overlay_crop[:, :, 3].astype(np.float32) / 255.0
+    alpha = alpha[..., None]
+
+    blended = (1.0 - alpha) * roi.astype(np.float32) + alpha * overlay_crop[:, :, :3].astype(np.float32)
+    roi[:] = blended.astype(np.uint8)
+    return frame_bgr
+
+
+def resize_rgba(img, new_w, new_h):
+    img = sanitize_rgba(img)
+    bgr = img[:, :, :3].astype(np.float32)
+    a = img[:, :, 3].astype(np.float32) / 255.0
+
+    bgr_premul = bgr * a[..., None]
+    bgr_r = cv2.resize(bgr_premul, (int(new_w), int(new_h)), interpolation=cv2.INTER_LINEAR)
+    a_r = cv2.resize((a * 255).astype(np.uint8), (int(new_w), int(new_h)), interpolation=cv2.INTER_LINEAR).astype(
+        np.float32
+    ) / 255.0
+
+    eps = 1e-6
+    bgr_out = bgr_r / (a_r[..., None] + eps)
+    bgr_out = np.clip(bgr_out, 0, 255).astype(np.uint8)
+
+    out = np.dstack([bgr_out, (a_r * 255).astype(np.uint8)])
+    out[out[:, :, 3] == 0, :3] = 0
+    return out
+
+
+def rotate_rgba(img, angle):
+    h, w = img.shape[:2]
+    center = (w / 2, h / 2)
+    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+
+    cos = abs(M[0, 0])
+    sin = abs(M[0, 1])
+    new_w = int(h * sin + w * cos)
+    new_h = int(h * cos + w * sin)
+
+    M[0, 2] += (new_w / 2) - center[0]
+    M[1, 2] += (new_h / 2) - center[1]
+
+    return warp_rgba(img, M, new_w, new_h)
 
 
 def warp_rgba(img, M, out_w, out_h):
@@ -134,94 +214,7 @@ def warp_rgba(img, M, out_w, out_h):
     out[out[:, :, 3] == 0, :3] = 0
     return out
 
-
-def rotate_rgba(img, angle):
-    h, w = img.shape[:2]
-    center = (w / 2, h / 2)
-    M = cv2.getRotationMatrix2D(center, angle, 1.0)
-
-    cos = abs(M[0, 0])
-    sin = abs(M[0, 1])
-    new_w = int(h * sin + w * cos)
-    new_h = int(h * cos + w * sin)
-
-    M[0, 2] += (new_w / 2) - center[0]
-    M[1, 2] += (new_h / 2) - center[1]
-
-    return warp_rgba(img, M, new_w, new_h)
-
-
-def resize_rgba(img, new_w, new_h):
-    img = sanitize_rgba(img)
-    bgr = img[:, :, :3].astype(np.float32)
-    a = img[:, :, 3].astype(np.float32) / 255.0
-
-    bgr_premul = bgr * a[..., None]
-    bgr_r = cv2.resize(bgr_premul, (int(new_w), int(new_h)), interpolation=cv2.INTER_LINEAR)
-    a_r = cv2.resize((a * 255).astype(np.uint8), (int(new_w), int(new_h)), interpolation=cv2.INTER_LINEAR).astype(
-        np.float32
-    ) / 255.0
-
-    eps = 1e-6
-    bgr_out = bgr_r / (a_r[..., None] + eps)
-    bgr_out = np.clip(bgr_out, 0, 255).astype(np.uint8)
-
-    out = np.dstack([bgr_out, (a_r * 255).astype(np.uint8)])
-    out[out[:, :, 3] == 0, :3] = 0
-    return out
-
-
-def overlay_rgba(frame_bgr, overlay_bgra, x, y):
-    if overlay_bgra is None:
-        return frame_bgr
-
-    h, w = overlay_bgra.shape[:2]
-    H, W = frame_bgr.shape[:2]
-
-    if x >= W or y >= H or x + w <= 0 or y + h <= 0:
-        return frame_bgr
-
-    x1, y1 = max(0, x), max(0, y)
-    x2, y2 = min(W, x + w), min(H, y + h)
-
-    ox1, oy1 = x1 - x, y1 - y
-    ox2, oy2 = ox1 + (x2 - x1), oy1 + (y2 - y1)
-
-    roi = frame_bgr[y1:y2, x1:x2]
-    overlay_crop = overlay_bgra[oy1:oy2, ox1:ox2]
-
-    alpha = overlay_crop[:, :, 3].astype(np.float32) / 255.0
-    alpha = alpha[..., None]
-
-    blended = (1.0 - alpha) * roi.astype(np.float32) + alpha * overlay_crop[:, :, :3].astype(np.float32)
-    roi[:] = blended.astype(np.uint8)
-    return frame_bgr
-
-
-def load_rgba(path):
-    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
-    if img is None:
-        return None
-    if img.ndim == 2:
-        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
-    if img.shape[2] == 3:
-        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
-    return sanitize_rgba(img)
-
-
-ASSETS = {k: load_rgba(v) for k, v in ASSET_PATHS.items()}
-
-
-def iris_center(face, side, w, h):
-    if side == "L":
-        ids = [LMS["l_iris_1"], LMS["l_iris_2"], LMS["l_iris_3"], LMS["l_iris_4"], LMS["l_iris_5"]]
-    else:
-        ids = [LMS["r_iris_1"], LMS["r_iris_2"], LMS["r_iris_3"], LMS["r_iris_4"], LMS["r_iris_5"]]
-    pts = [lm_xy(face, i, w, h) for i in ids]
-    cx = int(sum(p[0] for p in pts) / len(pts))
-    cy = int(sum(p[1] for p in pts) / len(pts))
-    return (cx, cy)
-
+#Modulo 3 filtros
 
 def aplicar_sombrero(frame, face, w, h):
     hat = ASSETS["hat"]
@@ -315,104 +308,7 @@ def aplicar_orejas(frame, face, w, h):
     y = cy - e_rot.shape[0] // 2
     return overlay_rgba(frame, e_rot, x, y)
 
-
-def filtro_escena(frame):
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
-    hsv[..., 1] *= 1.15
-    hsv[..., 2] *= 1.08
-    hsv = np.clip(hsv, 0, 255).astype(np.uint8)
-    out = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
-    out = cv2.convertScaleAbs(out, alpha=1.10, beta=5)
-    return out
-
-
-def filtro_ojos_glow(frame, face, w, h):
-    le = lm_xy(face, LMS["left_eye"], w, h)
-    re = lm_xy(face, LMS["right_eye"], w, h)
-    eye_dist = dist(le, re)
-    r = max(6, int(eye_dist * 0.10))
-    overlay = frame.copy()
-    cv2.circle(overlay, le, r, (255, 255, 255), -1)
-    cv2.circle(overlay, re, r, (255, 255, 255), -1)
-    return cv2.addWeighted(overlay, 0.45, frame, 0.55, 0)
-
-
-def bulge_pinch_roi(img, center, radius, strength):
-    H, W = img.shape[:2]
-    cx, cy = center
-    radius = int(radius)
-    if radius < 6:
-        return img
-
-    x1 = int(clamp(cx - radius, 0, W - 1))
-    x2 = int(clamp(cx + radius, 0, W - 1))
-    y1 = int(clamp(cy - radius, 0, H - 1))
-    y2 = int(clamp(cy + radius, 0, H - 1))
-    if x2 - x1 < 6 or y2 - y1 < 6:
-        return img
-
-    roi = img[y1:y2, x1:x2]
-    rh, rw = roi.shape[:2]
-
-    ys, xs = np.mgrid[0:rh, 0:rw].astype(np.float32)
-    dx = xs - (cx - x1)
-    dy = ys - (cy - y1)
-    r = np.sqrt(dx * dx + dy * dy)
-    rn = r / float(radius)
-
-    mask = rn < 1.0
-    eps = 1e-6
-
-    k = (1.0 - rn * rn)
-    s = float(clamp(strength, -0.92, 0.92))
-    r_src = r * (1.0 - s * k)
-
-    scale = r_src / (r + eps)
-    map_x = (cx - x1) + dx * scale
-    map_y = (cy - y1) + dy * scale
-
-    map_x[~mask] = xs[~mask]
-    map_y[~mask] = ys[~mask]
-
-    warped = cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    img[y1:y2, x1:x2] = warped
-    return img
-
-
-def warp_shift_circle(img, center, radius, shift):
-    H, W = img.shape[:2]
-    cx, cy = center
-    radius = int(radius)
-    if radius < 6:
-        return img
-
-    x1 = int(clamp(cx - radius, 0, W - 1))
-    x2 = int(clamp(cx + radius, 0, W - 1))
-    y1 = int(clamp(cy - radius, 0, H - 1))
-    y2 = int(clamp(cy + radius, 0, H - 1))
-    if x2 - x1 < 6 or y2 - y1 < 6:
-        return img
-
-    roi = img[y1:y2, x1:x2]
-    rh, rw = roi.shape[:2]
-
-    ys, xs = np.mgrid[0:rh, 0:rw].astype(np.float32)
-    dx = xs - (cx - x1)
-    dy = ys - (cy - y1)
-    r = np.sqrt(dx * dx + dy * dy)
-    rn = r / float(radius)
-    mask = rn < 1.0
-
-    s = (1.0 - rn) ** 2
-    s[~mask] = 0.0
-
-    map_x = xs
-    map_y = ys - (shift * s).astype(np.float32)
-
-    warped = cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
-    img[y1:y2, x1:x2] = warped
-    return img
-
+#Geométricos
 
 def filtro_ojos_grandes(frame, face, w, h):
     le = iris_center(face, "L", w, h)
@@ -529,6 +425,47 @@ def filtro_boca_pequena_muneco(frame, face, w, h):
     return out
 
 
+def filtro_cara_vshape(frame, face, w, h):
+    fl = lm_xy(face, LMS["face_left"], w, h)
+    fr = lm_xy(face, LMS["face_right"], w, h)
+    rad = int(dist(fl, fr) * 0.30)
+
+    out = frame.copy()
+    out = bulge_pinch_roi(out, fl, rad, strength=-0.65)
+    out = bulge_pinch_roi(out, fr, rad, strength=-0.65)
+    return out
+
+
+def filtro_baby_face(frame, face, w, h):
+    out = frame.copy()
+    out = filtro_ojos_grandes(out, face, w, h)
+    out = filtro_boca_pequena_muneco(out, face, w, h)
+    out = cv2.GaussianBlur(out, (7,7), 0)
+    return out
+
+
+def filtro_cara_pez(frame, face, w, h):
+    ml = lm_xy(face, LMS["mouth_left"], w, h)
+    mr = lm_xy(face, LMS["mouth_right"], w, h)
+    cx = int((ml[0] + mr[0]) / 2)
+    cy = int((ml[1] + mr[1]) / 2)
+    mouth_w = dist(ml, mr)
+
+    out = frame.copy()
+    out = bulge_pinch_roi(out, (cx, cy), int(mouth_w * 1.2), strength=0.9)
+    return out
+
+
+def filtro_cabeza_alien(frame, face, w, h):
+    fh = lm_xy(face, LMS["forehead"], w, h)
+    chin = lm_xy(face, LMS["chin"], w, h)
+    face_h = dist(fh, chin)
+
+    out = frame.copy()
+    out = bulge_pinch_roi(out, fh, int(face_h * 0.45), strength=0.85)
+    return out
+
+
 def filtro_smile_forzado(frame, face, w, h):
     ml = lm_xy(face, LMS["mouth_left"], w, h)
     mr = lm_xy(face, LMS["mouth_right"], w, h)
@@ -549,6 +486,56 @@ def filtro_smile_forzado(frame, face, w, h):
     return out
 
 
+#Escena
+
+def filtro_escena(frame):
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+    hsv[..., 1] *= 1.15
+    hsv[..., 2] *= 1.08
+    hsv = np.clip(hsv, 0, 255).astype(np.uint8)
+    out = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)
+    out = cv2.convertScaleAbs(out, alpha=1.10, beta=5)
+    return out
+
+
+def filtro_cine_teal_orange(frame):
+    img = frame.astype(np.float32)
+
+    img[..., 2] *= 1.15  # R
+    img[..., 1] *= 1.05  # G
+    img[..., 0] *= 0.90  # B
+
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return img
+
+def filtro_frio(frame):
+    img = frame.astype(np.float32)
+    img[..., 0] *= 1.15
+    img[..., 2] *= 0.90
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+def filtro_calido(frame):
+    img = frame.astype(np.float32)
+    img[..., 2] *= 1.15
+    img[..., 1] *= 1.05
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+def filtro_blanco_negro(frame):
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+
+def filtro_sepia(frame):
+    kernel = np.array([
+        [0.272, 0.534, 0.131],
+        [0.349, 0.686, 0.168],
+        [0.393, 0.769, 0.189],
+    ])
+    img = cv2.transform(frame, kernel)
+    return np.clip(img, 0, 255).astype(np.uint8)
+
+
+#Selecto de filtro
+
 def aplicar_filtro_activo(frame, face, w, h, idx):
     if idx == 0:
         return aplicar_sombrero(frame, face, w, h)
@@ -561,55 +548,176 @@ def aplicar_filtro_activo(frame, face, w, h, idx):
     if idx == 4:
         return filtro_escena(frame)
     if idx == 5:
-        return filtro_ojos_glow(frame, face, w, h)
-    if idx == 6:
         return filtro_ojos_grandes(frame, face, w, h)
-    if idx == 7:
+    if idx == 6:
         return filtro_boca_grande(frame, face, w, h)
-    if idx == 8:
+    if idx == 7:
         return filtro_nariz_pequena(frame, face, w, h)
-    if idx == 9:
+    if idx == 8:
         return filtro_cara_ancha(frame, face, w, h)
-    if idx == 10:
+    if idx == 9:
         return filtro_cara_delgada(frame, face, w, h)
-    if idx == 11:
+    if idx == 10:
         return filtro_menton_largo_alien(frame, face, w, h)
-    if idx == 12:
+    if idx == 11:
         return filtro_mejillas_infladas_chipmunk(frame, face, w, h)
-    if idx == 13:
+    if idx == 12:
         return filtro_frente_grande(frame, face, w, h)
-    if idx == 14:
+    if idx == 13:
         return filtro_boca_pequena_muneco(frame, face, w, h)
-    if idx == 15:
+    if idx == 14:
         return filtro_smile_forzado(frame, face, w, h)
+    if idx == 15:
+        return filtro_blanco_negro(frame)
+    if idx == 16:
+        return filtro_sepia(frame)
+    if idx == 17:
+        return filtro_frio(frame)
+    if idx == 18:
+        return filtro_calido(frame)
+    if idx == 19:
+        return filtro_cine_teal_orange(frame)
+    if idx == 20:
+        return filtro_cara_vshape(frame, face, w, h)
+    if idx == 21:
+        return filtro_baby_face(frame, face, w, h)
+    if idx == 22:
+        return filtro_cara_pez(frame, face, w, h)
+    if idx == 23:
+        return filtro_cabeza_alien(frame, face, w, h)
+
     return frame
 
+#Recursos gráficos
+ASSET_DIR = "assets"
+ASSET_PATHS = {
+    "hat": os.path.join(ASSET_DIR, "sombrero.png"),
+    "glasses": os.path.join(ASSET_DIR, "gafas.png"),
+    "mustache": os.path.join(ASSET_DIR, "bigote.png"),
+    "ears": os.path.join(ASSET_DIR, "orejas.png"),
+}
 
-def change_filter(direction, current_index, max_index):
-    if direction == "ARRIBA":
-        return (current_index - 1 + max_index) % max_index
-    if direction == "ABAJO":
-        return (current_index + 1) % max_index
-    return current_index
+# UTILIDADES MATEMÁTICAS Y GEOMÉTRICAS
+def clamp(v, a, b):
+    return max(a, min(b, v))
 
 
-def calcular_ratio_vertical(face, w, h):
-    nose = face.landmark[LMS["nose"]]
-    chin = face.landmark[LMS["chin"]]
-    le = face.landmark[LMS["left_eye"]]
-    re = face.landmark[LMS["right_eye"]]
+def dist(p1, p2):
+    return float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
 
-    nose_y = nose.y * h
-    chin_y = chin.y * h
-    eyes_y = (le.y + re.y) / 2 * h
 
-    face_altura = chin_y - eyes_y
-    if face_altura <= 0:
+def angle_deg(p1, p2):
+    return float(np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0])))
+
+
+#MANEJO DE IMÁGENES
+
+def sanitize_rgba(img):
+    if img is None:
         return None
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
+    if img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+    a = img[:, :, 3]
+    img[a == 0, 0] = 0
+    img[a == 0, 1] = 0
+    img[a == 0, 2] = 0
+    return img
 
-    return (nose_y - eyes_y) / face_altura
+
+def load_rgba(path):
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
+    if img is None:
+        return None
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGRA)
+    if img.shape[2] == 3:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2BGRA)
+    return sanitize_rgba(img)
 
 
+ASSETS = {k: load_rgba(v) for k, v in ASSET_PATHS.items()}
+
+
+#MOTORES DE DEFORMACIÓN
+def bulge_pinch_roi(img, center, radius, strength):
+    H, W = img.shape[:2]
+    cx, cy = center
+    radius = int(radius)
+    if radius < 6:
+        return img
+
+    x1 = int(clamp(cx - radius, 0, W - 1))
+    x2 = int(clamp(cx + radius, 0, W - 1))
+    y1 = int(clamp(cy - radius, 0, H - 1))
+    y2 = int(clamp(cy + radius, 0, H - 1))
+    if x2 - x1 < 6 or y2 - y1 < 6:
+        return img
+
+    roi = img[y1:y2, x1:x2]
+    rh, rw = roi.shape[:2]
+
+    ys, xs = np.mgrid[0:rh, 0:rw].astype(np.float32)
+    dx = xs - (cx - x1)
+    dy = ys - (cy - y1)
+    r = np.sqrt(dx * dx + dy * dy)
+    rn = r / float(radius)
+
+    mask = rn < 1.0
+    eps = 1e-6
+
+    k = (1.0 - rn * rn)
+    s = float(clamp(strength, -0.92, 0.92))
+    r_src = r * (1.0 - s * k)
+
+    scale = r_src / (r + eps)
+    map_x = (cx - x1) + dx * scale
+    map_y = (cy - y1) + dy * scale
+
+    map_x[~mask] = xs[~mask]
+    map_y[~mask] = ys[~mask]
+
+    warped = cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    img[y1:y2, x1:x2] = warped
+    return img
+
+
+def warp_shift_circle(img, center, radius, shift):
+    H, W = img.shape[:2]
+    cx, cy = center
+    radius = int(radius)
+    if radius < 6:
+        return img
+
+    x1 = int(clamp(cx - radius, 0, W - 1))
+    x2 = int(clamp(cx + radius, 0, W - 1))
+    y1 = int(clamp(cy - radius, 0, H - 1))
+    y2 = int(clamp(cy + radius, 0, H - 1))
+    if x2 - x1 < 6 or y2 - y1 < 6:
+        return img
+
+    roi = img[y1:y2, x1:x2]
+    rh, rw = roi.shape[:2]
+
+    ys, xs = np.mgrid[0:rh, 0:rw].astype(np.float32)
+    dx = xs - (cx - x1)
+    dy = ys - (cy - y1)
+    r = np.sqrt(dx * dx + dy * dy)
+    rn = r / float(radius)
+    mask = rn < 1.0
+
+    s = (1.0 - rn) ** 2
+    s[~mask] = 0.0
+
+    map_x = xs
+    map_y = ys - (shift * s).astype(np.float32)
+
+    warped = cv2.remap(roi, map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+    img[y1:y2, x1:x2] = warped
+    return img
+
+#MAIN
 def main():
     global baseline_ratio, STATE, active_filter_index, last_change_time, frame_count, start_time
 
